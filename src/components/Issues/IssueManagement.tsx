@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
-import { Plus, AlertCircle, Wrench, Shield, Sparkles, MessageSquare } from 'lucide-react';
+import { Plus, AlertCircle, Wrench, Shield, Sparkles, MessageSquare, AlertTriangle } from 'lucide-react';
 import type { Database } from '../../lib/database.types';
 
 type Issue = Database['public']['Tables']['issues']['Row'] & {
   reporter: Database['public']['Tables']['profiles']['Row'];
   assignee: Database['public']['Tables']['profiles']['Row'] | null;
+  is_sos?: boolean;
 };
 
 export function IssueManagement() {
@@ -15,7 +16,7 @@ export function IssueManagement() {
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [selectedIssue, setSelectedIssue] = useState<Issue | null>(null);
-  const [filter, setFilter] = useState<'all' | 'open' | 'in_progress' | 'resolved'>('all');
+  const [filter, setFilter] = useState<'all' | 'open' | 'in_progress' | 'resolved' | 'sos'>('all');
 
   useEffect(() => {
     loadIssues();
@@ -29,11 +30,15 @@ export function IssueManagement() {
           *,
           reporter:profiles!issues_reported_by_fkey(id, full_name, flat_number),
           assignee:profiles!issues_assigned_to_fkey(id, full_name, role)
-        `)
-        .order('created_at', { ascending: false });
+        `);
 
-      if (filter !== 'all') {
-        query = query.eq('status', filter);
+      if (filter === 'sos') {
+        query = query.eq('is_sos', true).order('created_at', { ascending: false });
+      } else {
+        query = query.order('is_sos', { ascending: false }).order('created_at', { ascending: false });
+        if (filter !== 'all') {
+          query = query.eq('status', filter);
+        }
       }
 
       const { data, error } = await query;
@@ -63,6 +68,25 @@ export function IssueManagement() {
       loadIssues();
     } catch (error) {
       console.error('Error updating issue status:', error);
+    }
+  };
+
+  const toggleSOS = async (issue: Issue) => {
+    if (profile?.role !== 'admin' || issue.status === 'resolved') return;
+
+    try {
+      const { error } = await supabase
+        .from('issues')
+        .update({
+          is_sos: !issue.is_sos,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', issue.id);
+
+      if (error) throw error;
+      loadIssues();
+    } catch (error) {
+      console.error('Error toggling SOS:', error);
     }
   };
 
@@ -105,7 +129,10 @@ export function IssueManagement() {
     }
   };
 
-  const getPriorityColor = (priority: string) => {
+  const getPriorityColor = (priority: string, isSOS?: boolean) => {
+    if (isSOS) {
+      return 'bg-red-600 text-white animate-pulse ring-2 ring-red-300';
+    }
     switch (priority) {
       case 'high':
         return 'bg-red-100 text-red-700 ring-2 ring-red-200';
@@ -126,6 +153,8 @@ export function IssueManagement() {
     );
   }
 
+  const sosIssues = issues.filter((i) => i.is_sos);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -142,18 +171,61 @@ export function IssueManagement() {
         </button>
       </div>
 
-      <div className="flex gap-2">
-        {(['all', 'open', 'in_progress', 'resolved'] as const).map((f) => (
+      {sosIssues.length > 0 && (
+        <div className="bg-gradient-to-r from-red-500 to-red-600 rounded-xl shadow-lg p-6 text-white border-2 border-red-700">
+          <div className="flex items-center gap-3 mb-3">
+            <AlertTriangle className="w-7 h-7 animate-bounce" />
+            <h2 className="text-2xl font-bold">SOS Alerts - Urgent Issues</h2>
+          </div>
+          <p className="text-red-100 mb-4">
+            {sosIssues.length} urgent {sosIssues.length === 1 ? 'issue' : 'issues'} requiring immediate attention
+          </p>
+          <div className="space-y-2">
+            {sosIssues.slice(0, 3).map((issue) => (
+              <div
+                key={issue.id}
+                className="bg-white bg-opacity-10 backdrop-blur-sm rounded-lg p-3 cursor-pointer hover:bg-opacity-20 transition-all"
+                onClick={() => setSelectedIssue(issue)}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <p className="font-semibold">{issue.title}</p>
+                    <p className="text-sm text-red-100">
+                      {issue.reporter.full_name} ({issue.reporter.flat_number}) • {new Date(issue.created_at).toLocaleString()}
+                    </p>
+                  </div>
+                  <span className={`px-3 py-1 rounded-full text-xs font-bold ${getStatusColor(issue.status)}`}>
+                    {issue.status.replace('_', ' ')}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex gap-2 flex-wrap">
+        {(['all', 'sos', 'open', 'in_progress', 'resolved'] as const).map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+            className={`px-4 py-2 rounded-lg font-medium transition-colors flex items-center gap-2 ${
               filter === f
-                ? 'bg-blue-600 text-white'
-                : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
+                ? f === 'sos'
+                  ? 'bg-red-600 text-white'
+                  : 'bg-blue-600 text-white'
+                : f === 'sos'
+                  ? 'bg-red-50 text-red-700 border border-red-300 hover:bg-red-100'
+                  : 'bg-white text-gray-700 border border-gray-300 hover:bg-gray-50'
             }`}
           >
-            {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1).replace('_', ' ')}
+            {f === 'sos' && <AlertTriangle className="w-4 h-4" />}
+            {f === 'all' ? 'All' : f === 'sos' ? 'SOS Alerts' : f.charAt(0).toUpperCase() + f.slice(1).replace('_', ' ')}
+            {f === 'sos' && sosIssues.length > 0 && (
+              <span className="bg-white text-red-600 px-2 py-0.5 rounded-full text-xs font-bold">
+                {sosIssues.length}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -164,32 +236,45 @@ export function IssueManagement() {
             <AlertCircle className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <h3 className="text-lg font-medium text-gray-900 mb-2">No issues found</h3>
             <p className="text-gray-600">
-              {filter === 'all' ? 'No issues have been reported yet' : `No ${filter.replace('_', ' ')} issues`}
+              {filter === 'sos'
+                ? 'No SOS alerts have been reported'
+                : filter === 'all'
+                  ? 'No issues have been reported yet'
+                  : `No ${filter.replace('_', ' ')} issues`}
             </p>
           </div>
         ) : (
           issues.map((issue) => (
             <div
               key={issue.id}
-              className={`bg-white rounded-xl shadow-sm border p-6 hover:shadow-md transition-shadow cursor-pointer ${
-                issue.priority === 'high' ? 'border-red-300' : 'border-gray-200'
+              className={`bg-white rounded-xl shadow-sm border p-6 hover:shadow-md transition-all cursor-pointer ${
+                issue.is_sos
+                  ? 'border-red-500 ring-2 ring-red-300 ring-opacity-50'
+                  : issue.priority === 'high'
+                    ? 'border-red-300'
+                    : 'border-gray-200'
               }`}
               onClick={() => setSelectedIssue(issue)}
             >
               <div className="flex items-start justify-between mb-4">
-                <div className="flex items-start gap-3">
+                <div className="flex items-start gap-3 flex-1">
                   <div className={`p-2 rounded-lg ${getCategoryColor(issue.category)}`}>
                     {getCategoryIcon(issue.category)}
                   </div>
-                  <div>
-                    <h3 className="text-lg font-bold text-gray-900">{issue.title}</h3>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h3 className="text-lg font-bold text-gray-900">{issue.title}</h3>
+                      {issue.is_sos && (
+                        <AlertTriangle className="w-5 h-5 text-red-600 animate-pulse" />
+                      )}
+                    </div>
                     <p className="text-sm text-gray-600">
                       Reported by {issue.reporter.full_name} ({issue.reporter.flat_number})
                     </p>
                   </div>
                 </div>
-                <span className={`px-2 py-1 rounded text-xs font-medium ${getPriorityColor(issue.priority)}`}>
-                  {issue.priority}
+                <span className={`px-3 py-1 rounded text-xs font-bold whitespace-nowrap ml-2 ${getPriorityColor(issue.priority, issue.is_sos)}`}>
+                  {issue.is_sos ? 'SOS' : issue.priority}
                 </span>
               </div>
 
@@ -240,6 +325,7 @@ export function IssueManagement() {
             updateIssueStatus(selectedIssue.id, status);
             setSelectedIssue(null);
           }}
+          onSOSToggle={() => toggleSOS(selectedIssue)}
         />
       )}
     </div>
@@ -258,6 +344,7 @@ function CreateIssueModal({ onClose, onSuccess }: CreateIssueModalProps) {
     title: '',
     description: '',
     priority: 'medium' as 'low' | 'medium' | 'high',
+    is_sos: false,
   });
   const [loading, setLoading] = useState(false);
 
@@ -272,7 +359,8 @@ function CreateIssueModal({ onClose, onSuccess }: CreateIssueModalProps) {
         category: formData.category,
         title: formData.title,
         description: formData.description,
-        priority: formData.priority,
+        priority: formData.is_sos ? 'high' : formData.priority,
+        is_sos: formData.is_sos,
       });
 
       if (error) throw error;
@@ -286,9 +374,10 @@ function CreateIssueModal({ onClose, onSuccess }: CreateIssueModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl max-w-2xl w-full">
+      <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
         <div className="p-6 border-b border-gray-200">
           <h2 className="text-2xl font-bold text-gray-900">Report New Issue</h2>
+          <p className="text-sm text-gray-600 mt-1">Use SOS for urgent safety/security issues requiring immediate attention</p>
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
@@ -307,20 +396,42 @@ function CreateIssueModal({ onClose, onSuccess }: CreateIssueModalProps) {
             </select>
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Priority
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.is_sos}
+                onChange={(e) => setFormData({ ...formData, is_sos: e.target.checked })}
+                className="w-4 h-4 text-red-600 rounded focus:ring-2 focus:ring-red-500"
+              />
+              <div>
+                <p className="font-semibold text-red-900 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4" />
+                  Mark as SOS (Urgent/Emergency)
+                </p>
+                <p className="text-sm text-red-700 mt-1">
+                  Use this for urgent safety or security issues that need immediate attention
+                </p>
+              </div>
             </label>
-            <select
-              value={formData.priority}
-              onChange={(e) => setFormData({ ...formData, priority: e.target.value as any })}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-            </select>
           </div>
+
+          {!formData.is_sos && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Priority
+              </label>
+              <select
+                value={formData.priority}
+                onChange={(e) => setFormData({ ...formData, priority: e.target.value as any })}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -361,7 +472,11 @@ function CreateIssueModal({ onClose, onSuccess }: CreateIssueModalProps) {
             <button
               type="submit"
               disabled={loading}
-              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className={`flex-1 px-4 py-2 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                formData.is_sos
+                  ? 'bg-red-600 hover:bg-red-700'
+                  : 'bg-blue-600 hover:bg-blue-700'
+              }`}
             >
               {loading ? 'Submitting...' : 'Submit Issue'}
             </button>
@@ -376,22 +491,31 @@ interface IssueDetailModalProps {
   issue: Issue;
   onClose: () => void;
   onStatusUpdate: (status: 'open' | 'in_progress' | 'resolved') => void;
+  onSOSToggle: () => void;
 }
 
-function IssueDetailModal({ issue, onClose, onStatusUpdate }: IssueDetailModalProps) {
+function IssueDetailModal({ issue, onClose, onStatusUpdate, onSOSToggle }: IssueDetailModalProps) {
   const { profile } = useAuth();
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-        <div className="p-6 border-b border-gray-200">
+        <div className={`p-6 border-b-2 ${issue.is_sos ? 'bg-red-50 border-red-300' : 'border-gray-200'}`}>
           <div className="flex items-start justify-between">
             <div>
               <div className="flex items-center gap-3 mb-2">
                 <h2 className="text-2xl font-bold text-gray-900">{issue.title}</h2>
-                <span className={`px-3 py-1 rounded-full text-xs font-medium ${issue.priority === 'high' ? 'bg-red-100 text-red-700' : issue.priority === 'medium' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-700'}`}>
-                  {issue.priority} priority
-                </span>
+                {issue.is_sos && (
+                  <div className="flex items-center gap-1 px-3 py-1 bg-red-600 text-white rounded-full text-xs font-bold animate-pulse">
+                    <AlertTriangle className="w-4 h-4" />
+                    SOS
+                  </div>
+                )}
+                {!issue.is_sos && (
+                  <span className={`px-3 py-1 rounded-full text-xs font-bold ${issue.priority === 'high' ? 'bg-red-100 text-red-700' : issue.priority === 'medium' ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-700'}`}>
+                    {issue.priority} priority
+                  </span>
+                )}
               </div>
               <p className="text-sm text-gray-600">
                 Reported by {issue.reporter.full_name} ({issue.reporter.flat_number})
@@ -447,21 +571,34 @@ function IssueDetailModal({ issue, onClose, onStatusUpdate }: IssueDetailModalPr
 
           {profile?.role === 'admin' && issue.status !== 'resolved' && (
             <div className="pt-4 border-t border-gray-200">
-              <h3 className="font-semibold text-gray-900 mb-3">Update Status</h3>
-              <div className="flex gap-3">
-                {issue.status !== 'in_progress' && (
+              <h3 className="font-semibold text-gray-900 mb-3">Admin Actions</h3>
+              <div className="space-y-3">
+                <div className="flex gap-3">
+                  {issue.status !== 'in_progress' && (
+                    <button
+                      onClick={() => onStatusUpdate('in_progress')}
+                      className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                    >
+                      Mark In Progress
+                    </button>
+                  )}
                   <button
-                    onClick={() => onStatusUpdate('in_progress')}
-                    className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                    onClick={() => onStatusUpdate('resolved')}
+                    className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
                   >
-                    Mark In Progress
+                    Mark Resolved
                   </button>
-                )}
+                </div>
+
                 <button
-                  onClick={() => onStatusUpdate('resolved')}
-                  className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                  onClick={onSOSToggle}
+                  className={`w-full px-4 py-2 rounded-lg font-medium transition-colors ${
+                    issue.is_sos
+                      ? 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                      : 'bg-red-100 text-red-700 hover:bg-red-200 border border-red-300'
+                  }`}
                 >
-                  Mark Resolved
+                  {issue.is_sos ? 'Remove SOS Status' : 'Mark as SOS (Urgent)'}
                 </button>
               </div>
             </div>

@@ -1,14 +1,20 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
-import { MessageSquare, Users, DollarSign, AlertCircle, TrendingUp } from 'lucide-react';
+import { MessageSquare, Users, DollarSign, AlertCircle, TrendingUp, AlertTriangle } from 'lucide-react';
+import type { Database } from '../../lib/database.types';
 
 interface Stats {
   pendingVisitors: number;
   unpaidDues: number;
   recentPosts: number;
   openIssues: number;
+  sosIssues: number;
 }
+
+type Issue = Database['public']['Tables']['issues']['Row'] & {
+  reporter: Database['public']['Tables']['profiles']['Row'];
+};
 
 export function Dashboard() {
   const { profile } = useAuth();
@@ -17,7 +23,9 @@ export function Dashboard() {
     unpaidDues: 0,
     recentPosts: 0,
     openIssues: 0,
+    sosIssues: 0,
   });
+  const [sosIssuesList, setSOSIssuesList] = useState<Issue[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -28,7 +36,7 @@ export function Dashboard() {
     if (!profile) return;
 
     try {
-      const [visitorsRes, paymentsRes, postsRes, issuesRes] = await Promise.all([
+      const [visitorsRes, paymentsRes, postsRes, issuesRes, sosRes] = await Promise.all([
         supabase
           .from('visitors')
           .select('id', { count: 'exact', head: true })
@@ -50,13 +58,28 @@ export function Dashboard() {
           .from('issues')
           .select('id', { count: 'exact', head: true })
           .in('status', ['open', 'in_progress']),
+
+        supabase
+          .from('issues')
+          .select(`
+            *,
+            reporter:profiles!issues_reported_by_fkey(id, full_name, flat_number)
+          `)
+          .eq('is_sos', true)
+          .in('status', ['open', 'in_progress'])
+          .order('created_at', { ascending: false })
+          .limit(5),
       ]);
+
+      const { data: sosData } = sosRes;
+      setSOSIssuesList((sosData as unknown as Issue[]) || []);
 
       setStats({
         pendingVisitors: visitorsRes.count || 0,
         unpaidDues: paymentsRes.count || 0,
         recentPosts: postsRes.count || 0,
         openIssues: issuesRes.count || 0,
+        sosIssues: sosData?.length || 0,
       });
     } catch (error) {
       console.error('Error loading stats:', error);
@@ -118,6 +141,28 @@ export function Dashboard() {
           Here's what's happening in your community today
         </p>
       </div>
+
+      {stats.sosIssues > 0 && (
+        <div className="bg-gradient-to-r from-red-500 to-red-600 rounded-xl shadow-lg p-6 text-white border-2 border-red-700">
+          <div className="flex items-center gap-3 mb-3">
+            <AlertTriangle className="w-7 h-7 animate-bounce" />
+            <h2 className="text-2xl font-bold">SOS Alerts - {stats.sosIssues} Urgent Issue{stats.sosIssues !== 1 ? 's' : ''}</h2>
+          </div>
+          <p className="text-red-100 mb-4">
+            Critical safety/security issues requiring immediate attention
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {sosIssuesList.slice(0, 4).map((issue) => (
+              <div key={issue.id} className="bg-white bg-opacity-10 backdrop-blur-sm rounded-lg p-3">
+                <p className="font-semibold text-white">{issue.title}</p>
+                <p className="text-xs text-red-100 mt-1">
+                  {issue.reporter.full_name} ({issue.reporter.flat_number})
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         {statCards.map((card) => {
